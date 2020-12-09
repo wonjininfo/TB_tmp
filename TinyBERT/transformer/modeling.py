@@ -28,9 +28,11 @@ import tempfile
 import sys
 from io import open
 
+from typing import Callable, List, Tuple
+
 import torch
 import torch.nn.functional as F
-from torch import nn
+from torch import nn, device, dtype, Tensor
 from torch.nn import CrossEntropyLoss
 from torch.autograd import Variable
 from torch.nn.parameter import Parameter
@@ -625,6 +627,41 @@ class BertPreTrainedModel(nn.Module):
                 ))
         self.config = config
 
+    """
+    Custom codes by WJ : 
+    1. Resolving StopIteration exceptions. (https://github.com/huggingface/transformers/pull/4300)
+    Codes added from PreTrainedModel (and ModuleUtilsMixin) from transformers version near 1.6
+    https://github.com/huggingface/transformers/blob/3aba4c5cf5bea10e386f30393b1dedf195e82fe9/src/transformers/modeling_utils.py
+    """
+    @property
+    def device(self) -> device:
+        try:
+            return next(self.parameters()).device
+        except StopIteration:
+
+            def find_tensor_attributes(module: nn.Module) -> List[Tuple[str, Tensor]]:
+                tuples = [(k, v) for k, v in module.__dict__.items() if torch.is_tensor(v)]
+                return tuples
+
+            gen = self._named_members(get_members_fn=find_tensor_attributes)
+            first_tuple = next(gen)
+            return first_tuple[1].device
+
+    @property
+    def dtype(self) -> dtype:
+        try:
+            return next(self.parameters()).dtype
+        except StopIteration:
+
+            def find_tensor_attributes(module: nn.Module) -> List[Tuple[str, Tensor]]:
+                tuples = [(k, v) for k, v in module.__dict__.items() if torch.is_tensor(v)]
+                return tuples
+
+            gen = self._named_members(get_members_fn=find_tensor_attributes)
+            first_tuple = next(gen)
+            return first_tuple[1].dtype
+    # Custom code ended
+
     def init_bert_weights(self, module):
         """ Initialize the weights.
         """
@@ -826,7 +863,8 @@ class BertModel(BertPreTrainedModel):
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
         extended_attention_mask = extended_attention_mask.to(
-            dtype=next(self.parameters()).dtype)  # fp16 compatibility
+            #dtype=next(self.parameters()).dtype)  # fp16 compatibility # https://github.com/huggingface/transformers/pull/4300
+            dtype=self.dtype) # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
 
         embedding_output = self.embeddings(input_ids, token_type_ids)

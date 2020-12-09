@@ -50,7 +50,7 @@ class DocumentDatabase:
             self.temp_dir = TemporaryDirectory()
             self.working_dir = Path(self.temp_dir.name)
             self.document_shelf_filepath = self.working_dir / 'shelf.db'
-            self.document_shelf = shelve.open('/cache/shelf.db',
+            self.document_shelf = shelve.open('/tmp/shelf.db',
                                               flag='n', protocol=-1)
             self.documents = None
         else:
@@ -367,11 +367,11 @@ def main():
     with DocumentDatabase(reduce_memory=args.reduce_memory) as docs:
         with args.train_corpus.open() as f:
             for line in tqdm(f, desc="Loading Dataset", unit=" lines"):
-		line = line.strip()
-		if line == "": # The last line
-		    continue
+                line = line.strip()
+                if line == "": # The last line
+                    continue
                 line = json.loads(line)
-		inputStr = line["title"].strip(".").strip("[]") + ". " + line["abstract"].replace("\n", " ")
+                inputStr = line["title"].strip(".").strip("[]") + ". " + line["abstract"].replace("\n", " ")
                 tokens = tokenizer.tokenize(inputStr)
                 docs.add_document([tokens])
                 doc_num += 1

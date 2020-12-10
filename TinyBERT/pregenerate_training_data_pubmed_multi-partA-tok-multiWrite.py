@@ -229,14 +229,15 @@ def create_masked_lm_predictions(tokens, masked_lm_prob, max_predictions_per_seq
     return tokens, mask_indices, masked_token_labels
 
 
-def create_instances_from_document(
-        doc_database, doc_idx, max_seq_length, short_seq_prob,
+def create_instances_from_document_thread(
+        splitIdx, doc_idx, max_seq_length, short_seq_prob,
         masked_lm_prob, max_predictions_per_seq, whole_word_mask, vocab_list, bi_text=True):
     """This code is mostly a duplicate of the equivalent function from Google BERT's repo.
     However, we make some changes and improvements. Sampling is improved and no longer requires a loop in this function.
     Also, documents are sampled proportionally to the number of sentences they contain, which means each sentence
     (rather than each document) has an equal chance of being sampled as a false example for the NextSentence task."""
-    document = doc_database[doc_idx]
+    global docsDict
+    document = docsDict[splitIdx][doc_idx]
     # Account for [CLS], [SEP], [SEP]
     max_num_tokens = max_seq_length - 3
 
@@ -284,7 +285,7 @@ def create_instances_from_document(
                     target_b_length = target_seq_length - len(tokens_a)
 
                     # Sample a random document, with longer docs being sampled more frequently
-                    random_document = doc_database.sample_doc(current_idx=doc_idx, sentence_weighted=True)
+                    random_document = docsDict[splitIdx].sample_doc(current_idx=doc_idx, sentence_weighted=True)
 
                     random_start = randrange(0, len(random_document))
                     for j in range(random_start, len(random_document)):
@@ -335,14 +336,15 @@ def create_instances_from_document(
     return instances
 
 
-def create_training_file(docs, vocab_list, args, epoch_num, bi_text=True):
+def create_training_file(splitIdx, vocab_list, args, epoch_num, bi_text=True):
+    global docsDict
     epoch_filename = args.output_dir / "epoch_{}.json".format(epoch_num)
     #epoch_filename = os.path.join("/datadrive-mirror%s"%epoch_num,"bionlpcorpus/CORPUS_JSON_DIR_pubmed190102_biobert-512-multi", "epoch_{}.json".format(epoch_num)) # hard coded cuz of distributed saving
     num_instances = 0
     with open(epoch_filename, 'w') as epoch_file:
-        for doc_idx in trange(len(docs), desc="Document"):
-            doc_instances = create_instances_from_document(
-                docs, doc_idx, max_seq_length=args.max_seq_len, short_seq_prob=args.short_seq_prob,
+        for doc_idx in trange(len(docsDict[splitIdx]), desc="Document"):
+            doc_instances = create_instances_from_document_thread(
+                splitIdx=splitIdx, doc_idx=doc_idx, max_seq_length=args.max_seq_len, short_seq_prob=args.short_seq_prob,
                 masked_lm_prob=args.masked_lm_prob, max_predictions_per_seq=args.max_predictions_per_seq,
                 whole_word_mask=args.do_whole_word_mask, vocab_list=vocab_list, bi_text=bi_text)
             doc_instances = [json.dumps(instance) for instance in doc_instances]
@@ -381,8 +383,8 @@ def tokenWorker(basePATH, filename, args, destPATH="cache"):
     return{filename: linecnt}
 
 
-def mthreadReadfile_to_docs(filePath):
-    global docs
+def mthreadReadfile_to_docs(filePath, splitIdx):
+    global docsDict
     lineList = []
     doc_lengthsList = []
     with open(filePath, "r") as inFile:
@@ -391,7 +393,7 @@ def mthreadReadfile_to_docs(filePath):
             splitLine = line.split("\t")
             lineList.append([splitLine])
             doc_lengthsList.append(len(splitLine))
-    docs.extend_document(lineList,doc_lengths=doc_lengthsList, multithreading=True)
+    docsDict[splitIdx].extend_document(lineList,doc_lengths=doc_lengthsList, multithreading=True)
 
 
         
@@ -443,13 +445,19 @@ def main():
         print("Sum of processedLineCnt:", np.sum([list(ele.values())[0] for ele in processedLineCnt]))
     """
     fileCnt = 0 
-    global docs
-    docs = DocumentDatabase(num_workers=args.num_workers, reduce_memory=args.reduce_memory)
-    for fileName in [fele for idx, fele in enumerate(fileNameList) if idx % 5==0]:
-    #for fileName in fileNameList:
-        filePath = os.path.join("/", destPATH, f"{fileName}-intrim.txt")
-        readThr = threading.Thread(target=mthreadReadfile_to_docs, args=(filePath,))
-        readThr.start()
+    global docsDict
+    docsDict = {
+        idx:DocumentDatabase(num_workers=args.num_workers, reduce_memory=args.reduce_memory)
+        for idx in range(args.epochs_to_generate)
+    }
+    #fileNameList = [fele for idx, fele in enumerate(fileNameList) if idx % 5==0] # TMP for smaller set /5
+    print(f"Reduced len fileNameList: ", len(fileNameList))
+
+    for splitIdx in range(args.epochs_to_generate):
+        for fileName in [fele for idx, fele in enumerate(fileNameList) if idx % args.epochs_to_generate==splitIdx]:
+            filePath = os.path.join("/", destPATH, f"{fileName}-intrim.txt")
+            readThr = threading.Thread(target=mthreadReadfile_to_docs, args=(filePath,splitIdx))
+            readThr.start()
 
     print('Wating for read threads to be executed.')
     mainThread = threading.currentThread()
@@ -457,19 +465,15 @@ def main():
         if thread is not mainThread:
             thread.join()
 
-    print(f"Reading tokenized file done. fileCnt: {fileCnt}, doc_num: %s"%(len(docs)))
-    if len(docs) <= 1:
-        exit("ERROR: No document breaks were found in the input file! These are necessary to allow the script to "
-             "ensure that random NextSentences are not sampled from the same document. Please add blank lines to "
-             "indicate breaks between documents in your input file. If your dataset does not contain multiple "
-             "documents, blank lines can be inserted at any natural boundary, such as the ends of chapters, "
-             "sections or paragraphs.")
+    print(f"Reading tokenized file done. fileCnt: {fileCnt}, splited in %s, each: %s, total %s"%(len(docsDict), list(map(lambda x: len(x), docsDict.values())), sum(map(lambda x: len(x), docsDict.values())) ))
+    print("Example tokenized sentence : ", docsDict[0][0])
+    if len(docsDict) < 1:
+        exit("ERROR")
 
     args.output_dir.mkdir(exist_ok=True)
 
     if args.num_workers > 1:
-        splitNum = int(len(docs)/args.epochs_to_generate)+1
-        arguments = [(docs, vocab_list, args, idx) for idx in range(args.epochs_to_generate)]
+        arguments = [(idx, vocab_list, args, idx) for idx in range(args.epochs_to_generate)]
         for argument in arguments:
             writeThr = threading.Thread(target=create_training_file, args=argument)
             writeThr.start()
@@ -481,7 +485,7 @@ def main():
     else:
         for epoch in trange(args.epochs_to_generate, desc="Epoch"):
             bi_text = True if not args.one_seq else False
-            epoch_file, metric_file = create_training_file(docs, vocab_list, args, epoch, bi_text=bi_text)
+            epoch_file, metric_file = create_training_file(0, vocab_list, args, epoch, bi_text=bi_text)
     
 
 if __name__ == '__main__':

@@ -306,8 +306,10 @@ def main():
     if args.gradient_accumulation_steps < 1:
         raise ValueError("Invalid gradient_accumulation_steps parameter: {}, should be >= 1".format(
             args.gradient_accumulation_steps))
+    else:
+        print("gradient_accumulation_steps:", args.gradient_accumulation_steps)
 
-    args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
+    args.train_batch_size = args.train_batch_size
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -326,12 +328,18 @@ def main():
     for i in range(int(args.num_train_epochs)):
         # The modulo takes into account the fact that we may loop over limited epochs of data
         total_train_examples += samples_per_epoch[i % len(samples_per_epoch)]
+        print(f"epoch {i} has {samples_per_epoch[i % len(samples_per_epoch)]} samples")
 
     num_train_optimization_steps = int(
-        total_train_examples / args.train_batch_size / args.gradient_accumulation_steps)
+        (total_train_examples / args.train_batch_size)) #/ args.gradient_accumulation_steps)
+
+    print("train_batch_size:", args.train_batch_size)
+    print("virtual train_batch_size by gradient_accumulation_steps :", args.train_batch_size*args.gradient_accumulation_steps)
+    print("Number of total updates (global_step):", num_train_optimization_steps)
+    
     if args.local_rank != -1:
         num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
-
+    
     if args.continue_train:
         student_model = TinyBertForPreTraining.from_pretrained(args.student_model)
     else:

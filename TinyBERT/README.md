@@ -32,6 +32,7 @@ General distillation has two steps: (1) generate the corpus of json format; (2) 
 Step 1: use `pregenerate_training_data.py` to produce the corpus of json format  
 
 
+
 ```
  
 # ${BERT_BASE_DIR}$ includes the BERT-base teacher model.
@@ -43,6 +44,28 @@ python pregenerate_training_data.py --train_corpus ${CORPUS_RAW} \
                   --output_dir ${CORPUS_JSON_DIR}$ 
                              
 ```
+<br>WJ Modified: Please use `pregenerate_training_data_pubmed_multi-partA-tok-multiWrite.py` for faster pre-processing (Multi-processing and Multi-threading enabled). 
+<br>``--epochs_to_generate`` means the number of splits (Since pubmed is a large corpus, I modified the code to save the training data into n-split files). 
+<br>Please be noticed that for this example, `--do_lower_case` is not enabled (BioBERT setting).
+```bash
+cd /
+sudo ln -s tmp cache
+#--------------------
+BERT_BASE_DIR=/biobert_v1.1_pubmed/
+CORPUS_RAW=/pubmed/
+
+CORPUS_JSON_DIR=/CORPUS_JSON_DIR_pubmed-512
+
+
+python pregenerate_training_data_pubmed_multi-partA-tok-multiWrite.py --train_corpus ${CORPUS_RAW} \
+                  --bert_model ${BERT_BASE_DIR} \
+                  --reduce_memory --do_lower_case \
+                  --epochs_to_generate 10 \
+                  --output_dir ${CORPUS_JSON_DIR}  --max_seq_len 512
+```
+
+
+<hr>
 
 Step 2: use `general_distill.py` to run the general distillation
 ```

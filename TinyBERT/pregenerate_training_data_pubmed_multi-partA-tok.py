@@ -446,9 +446,6 @@ def main():
     global docs
     docs = DocumentDatabase(num_workers=args.num_workers, reduce_memory=args.reduce_memory)
     
-    fileNameList = np.random.permutation(fileNameList)
-    print(f"Reduced (and shuffled) len fileNameList: ", len(fileNameList))
-    
     for fileName in [fele for idx, fele in enumerate(fileNameList) if idx % 5==0]:
     #for fileName in fileNameList:
         filePath = os.path.join("/", destPATH, f"{fileName}-intrim.txt")

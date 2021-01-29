@@ -451,8 +451,7 @@ def main():
         for idx in range(args.epochs_to_generate)
     }
     #fileNameList = [fele for idx, fele in enumerate(fileNameList) if idx % 5==0] # TMP for smaller set /5
-    fileNameList = np.random.permutation(fileNameList)
-    print(f"Reduced (and shuffled) len fileNameList: ", len(fileNameList))
+    print(f"Reduced len fileNameList: ", len(fileNameList))
 
     for splitIdx in range(args.epochs_to_generate):
         for fileName in [fele for idx, fele in enumerate(fileNameList) if idx % args.epochs_to_generate==splitIdx]:

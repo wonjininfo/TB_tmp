@@ -35,10 +35,12 @@ from torch.nn import CrossEntropyLoss, MSELoss
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import matthews_corrcoef, f1_score
 
-from transformer.modeling import TinyBertForSequenceClassification
+from transformer.modeling import TinyBertForNER, TinyBertForSequenceClassification
 from transformer.tokenization import BertTokenizer
 from transformer.optimization import BertAdam
 from transformer.file_utils import WEIGHTS_NAME, CONFIG_NAME
+
+import pdb
 
 csv.field_size_limit(sys.maxsize)
 
@@ -646,6 +648,11 @@ def do_eval(model, task_name, eval_dataloader,
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--task_type",
+                        default="",
+                        type=str,
+                        required=True,
+                        help="Which task? : [seqtag | seqcls]")
     parser.add_argument("--data_dir",
                         default=None,
                         type=str,
@@ -741,6 +748,10 @@ def main():
 
     args = parser.parse_args()
     logger.info('The args: {}'.format(args))
+
+    if agrs.task_type not in ["seqtag", "seqcls"]:
+        print("Wrong task_type! Should be one of seqtag or seqcls")
+        raise NotImplemented
 
     processors = {
         "cola": ColaProcessor,
@@ -852,10 +863,20 @@ def main():
     eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
     if not args.do_eval:
-        teacher_model = TinyBertForSequenceClassification.from_pretrained(args.teacher_model, num_labels=num_labels)
+        if args.task_type == "seqtag":
+            teacher_model = TinyBertForNER.from_pretrained(args.teacher_model, num_labels=num_labels)
+        elif args.task_type == "seqcls":
+            teacher_model = TinyBertForSequenceClassification.from_pretrained(args.teacher_model, num_labels=num_labels)
+        else:
+            raise NotImplemented
         teacher_model.to(device)
 
-    student_model = TinyBertForSequenceClassification.from_pretrained(args.student_model, num_labels=num_labels)
+    if args.task_type == "seqtag":
+        student_model = TinyBertForNER.from_pretrained(args.student_model, num_labels=num_labels)
+    elif args.task_type == "seqcls":
+        student_model = TinyBertForSequenceClassification.from_pretrained(args.student_model, num_labels=num_labels)
+    else:
+        raise NotImplemented
     student_model.to(device)
     if args.do_eval:
         logger.info("***** Running evaluation *****")
@@ -936,7 +957,7 @@ def main():
                 with torch.no_grad():
                     teacher_logits, teacher_atts, teacher_reps = teacher_model(input_ids, segment_ids, input_mask)
 
-                if not args.pred_distill:
+                if not args.pred_distill: # Intermediate-layer (Transformer, Embedding) Distillation
                     teacher_layer_num = len(teacher_atts)
                     student_layer_num = len(student_atts)
                     assert teacher_layer_num % student_layer_num == 0
@@ -962,7 +983,8 @@ def main():
                     loss = rep_loss + att_loss
                     tr_att_loss += att_loss.item()
                     tr_rep_loss += rep_loss.item()
-                else:
+                else: # Prediction-layer Distillation
+                    pdb.set_trace() # check shape
                     if output_mode == "classification":
                         cls_loss = soft_cross_entropy(student_logits / args.temperature,
                                                       teacher_logits / args.temperature)

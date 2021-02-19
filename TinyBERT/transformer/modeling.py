@@ -1178,3 +1178,34 @@ class TinyBertForSequenceClassification(BertPreTrainedModel):
                 tmp.append(self.fit_dense(sequence_layer))
             sequence_output = tmp
         return logits, att_output, sequence_output
+
+
+class TinyBertForNER(BertPreTrainedModel):
+    def __init__(self, config, num_labels, fit_size=768):
+        super(TinyBertForNER, self).__init__(config)
+        self.num_labels = num_labels
+        self.bert = BertModel(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.seqTagger = nn.Linear(in_features = config.hidden_size, out_features = num_labels)
+        self.classifier = self.seqTagger # legacy TODO : delete 
+        self.fit_dense = nn.Linear(config.hidden_size, fit_size)
+        self.apply(self.init_bert_weights)
+
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None,
+                labels=None, is_student=False):
+
+        sequence_output, att_output, pooled_output = self.bert(input_ids, token_type_ids, attention_mask,
+                                                               output_all_encoded_layers=True, output_att=True)
+        # for old cls clasisification task
+        #logits = self.classifier(torch.relu(pooled_output))  # legacy TODO : delete
+        
+        # sequence_output = number of layers * [batch_size, sequence_length, hidden_size]
+        logits = self.seqTagger(sequence_output)
+        assert logit.size()[-1] == config.hidden_size
+
+        tmp = []
+        if is_student:
+            for s_id, sequence_layer in enumerate(sequence_output):
+                tmp.append(self.fit_dense(sequence_layer))
+            sequence_output_danse = tmp
+        return logits, att_output, sequence_output_danse

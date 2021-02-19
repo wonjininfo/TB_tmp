@@ -119,6 +119,72 @@ class DataProcessor(object):
             return lines
 
 
+
+class NerProcessor(DataProcessor):
+    # TODO
+    def get_train_examples(self, data_dir):
+        return self._create_example(
+            self._read_data(os.path.join(data_dir, "train_dev.tsv")), "train"
+        )
+
+    def get_dev_examples(self, data_dir):
+        return self._create_example(
+            self._read_data(os.path.join(data_dir, "devel.tsv")), "dev"
+        )
+
+    def get_test_examples(self,data_dir):
+        return self._create_example(
+            self._read_data(os.path.join(data_dir, "test.tsv")), "test")
+
+
+    def get_labels(self):
+        return ["[PAD]", "B", "I", "O", "X", "[CLS]", "[SEP]"] 
+
+    def _create_example(self, lines, set_type):
+        examples = []
+        for (i, line) in enumerate(lines):
+            guid = "%s-%s" % (set_type, i)
+            text = tokenization.convert_to_unicode(line[1])
+            label = tokenization.convert_to_unicode(line[0])
+            examples.append(InputExample(guid=guid, text=text, label=label))
+        return examples
+
+    @classmethod
+    def _read_data(cls, input_file):
+        """Reads a BIO data."""
+        inpFilept = open(input_file)
+        lines = []
+        words = []
+        labels = []
+        for lineIdx, line in enumerate(inpFilept):
+            contents = line.splitlines()[0]
+            lineList = contents.split()
+            if len(lineList) == 0: # For blank line
+                assert len(words) == len(labels), "lineIdx: %s,  len(words)(%s) != len(labels)(%s) \n %s\n%s"%(lineIdx, len(words), len(labels), " ".join(words), " ".join(labels))
+                if len(words) != 0:
+                    wordSent = " ".join(words)
+                    labelSent = " ".join(labels)
+                    lines.append((labelSent, wordSent))
+                    words = []
+                    labels = []
+                else: 
+                    print("Two continual empty lines detected!")
+            else:
+                words.append(lineList[0])
+                labels.append(lineList[-1])
+        if len(words) != 0:
+            wordSent = " ".join(words)
+            labelSent = " ".join(labels)
+            lines.append((labelSent, wordSent))
+            words = []
+            labels = []
+
+        inpFilept.close()
+        return lines
+
+
+
+
 class MrpcProcessor(DataProcessor):
     """Processor for the MRPC data set (GLUE version)."""
 
@@ -754,6 +820,7 @@ def main():
         raise NotImplemented
 
     processors = {
+        "ner": NerProcessor,
         "cola": ColaProcessor,
         "mnli": MnliProcessor,
         "mnli-mm": MnliMismatchedProcessor,
@@ -767,6 +834,7 @@ def main():
     }
 
     output_modes = {
+        "ner": "classification",
         "cola": "classification",
         "mnli": "classification",
         "mrpc": "classification",
@@ -780,6 +848,7 @@ def main():
 
     # intermediate distillation default parameters
     default_params = {
+        "ner": {"num_train_epochs": 50, "max_seq_length": 128}, # TODO
         "cola": {"num_train_epochs": 50, "max_seq_length": 64},
         "mnli": {"num_train_epochs": 5, "max_seq_length": 128},
         "mrpc": {"num_train_epochs": 20, "max_seq_length": 128},
@@ -793,6 +862,7 @@ def main():
     acc_tasks = ["mnli", "mrpc", "sst-2", "qqp", "qnli", "rte"]
     corr_tasks = ["sts-b"]
     mcc_tasks = ["cola"]
+    f1_tasks = ["ner"]  # TODO
 
     # Prepare devices
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")

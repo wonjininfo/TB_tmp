@@ -40,6 +40,11 @@ from transformer.tokenization import BertTokenizer
 from transformer.optimization import BertAdam
 from transformer.file_utils import WEIGHTS_NAME, CONFIG_NAME
 
+import tokenization
+import json
+import tf # TODO
+import collections
+
 import pdb
 
 csv.field_size_limit(sys.maxsize)
@@ -58,6 +63,8 @@ try:
 except:
     oncloud = False
 
+# python 3
+unicode=str
 
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
@@ -119,7 +126,7 @@ class DataProcessor(object):
             return lines
 
 
-
+######## For NER Section Start ########
 class NerProcessor(DataProcessor):
     # TODO
     def get_train_examples(self, data_dir):
@@ -136,9 +143,20 @@ class NerProcessor(DataProcessor):
         return self._create_example(
             self._read_data(os.path.join(data_dir, "test.tsv")), "test")
 
+    def get_labels(self,label_path=None):
+        labelList = list()
+        if label_path == None:
+            labelList = ["B", "I", "O"]
+        else:
+            try:
+                with open(label_path, "r") as labelFp:
+                    for line in labelFp.readlines():
+                        labelList.append(line.strip())
+            except:
+                logger.info("labels.txt not found! Using basic labels of B, I, and O")
+                labelList = ["B", "I", "O"]
 
-    def get_labels(self):
-        return ["[PAD]", "B", "I", "O", "X", "[CLS]", "[SEP]"] 
+        return ["[PAD]"] + labelList + [ "X", "[CLS]", "[SEP]"] 
 
     def _create_example(self, lines, set_type):
         examples = []
@@ -146,7 +164,7 @@ class NerProcessor(DataProcessor):
             guid = "%s-%s" % (set_type, i)
             text = tokenization.convert_to_unicode(line[1])
             label = tokenization.convert_to_unicode(line[0])
-            examples.append(InputExample(guid=guid, text=text, label=label))
+            examples.append(InputExample(guid=guid, text_a=text, label=label))
         return examples
 
     @classmethod
@@ -182,7 +200,145 @@ class NerProcessor(DataProcessor):
         inpFilept.close()
         return lines
 
+def write_tokens(tokens,mode):
+    if mode=="test":
+        path = os.path.join(FLAGS.output_dir, "token_"+mode+".txt")
+        wf = open(path,'a')
+        for token in tokens:
+            if token!="[PAD]":
+                wf.write(token+'\n')
+        wf.close()
 
+def convert_single_example(ex_index, example, label_map, max_seq_length, tokenizer,mode): # For NER only
+    textlist = example.text.split()
+    labellist = example.label.split()
+    tokens = []
+    labels = []
+    for i, word in enumerate(textlist):
+        token = tokenizer.tokenize(word)
+        tokens.extend(token)
+        label_1 = labellist[i]
+        for m,  tok in enumerate(token):
+            if m == 0:
+                labels.append(label_1)
+            else:
+                labels.append("X")
+
+    # drop if token is longer than max_seq_length
+    if len(tokens) >= max_seq_length - 1:
+        tokens = tokens[0:(max_seq_length - 2)]
+        labels = labels[0:(max_seq_length - 2)]
+    ntokens = []
+    segment_ids = []
+    label_id = []
+    ntokens.append("[CLS]")
+    segment_ids.append(0)
+    label_id.append(label_map["[CLS]"])
+    for i, token in enumerate(tokens):
+        ntokens.append(token)
+        segment_ids.append(0)
+        label_id.append(label_map[labels[i]])
+    ntokens.append("[SEP]")
+    segment_ids.append(0)
+    label_id.append(label_map["[SEP]"])
+
+    input_ids = tokenizer.convert_tokens_to_ids(ntokens)
+    
+    # The mask has 1 for real tokens and 0 for padding tokens.
+    input_mask = [1] * len(input_ids)
+    
+    # Zero-pad up to the sequence length.
+    while len(input_ids) < max_seq_length:
+        input_ids.append(0)
+        input_mask.append(0)
+        segment_ids.append(0)
+        label_id.append(0)
+        ntokens.append("[PAD]")
+    assert len(input_ids) == max_seq_length
+    assert len(input_mask) == max_seq_length
+    assert len(segment_ids) == max_seq_length
+    assert len(label_id) == max_seq_length
+
+    if ex_index < 4 : # Examples before model run
+        logger.info("*** Example ***")
+        logger.info("guid: %s" % (example.guid))
+        logger.info("tokens: %s" % " ".join(
+            [tokenization.printable_text(x) for x in tokens]))
+        logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+        logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+        logger.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+        logger.info("label_id: %s" % " ".join([str(x) for x in label_id]))
+        #logger.info("label_mask: %s" % " ".join([str(x) for x in label_mask]))
+
+    feature = InputFeatures(
+        input_ids=input_ids,
+        input_mask=input_mask,
+        segment_ids=segment_ids,
+        label_id=label_id,
+        #label_mask = label_mask
+    )
+    write_tokens(ntokens,mode)
+    return feature
+
+def filed_based_convert_examples_to_features(
+        examples, label_list, max_seq_length, tokenizer, output_dir, mode=None):
+    # mode [str]: train or test
+
+    label_map = {}
+    for i, label in enumerate(label_list):
+        label_map[label] = i
+    with open(os.path.join(output_dir,'label2id.json'),'wb') as w:
+        json.dump(obj=label_map,fp=w)    
+    
+    writer = tf.python_io.TFRecordWriter(os.path.join(output_dir, "%s.tf_record"%mode))  # TODO : get rid of TFRecord
+    for (ex_index, example) in enumerate(examples):
+        if ex_index % 5000 == 0:
+            logger.info("Writing example %d of %d" % (ex_index, len(examples)))
+        feature = convert_single_example(ex_index, example, label_map, max_seq_length, tokenizer,mode)
+
+        def create_int_feature(values):
+            f = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
+            return f
+
+        features = collections.OrderedDict()
+        features["input_ids"] = create_int_feature(feature.input_ids)
+        features["input_mask"] = create_int_feature(feature.input_mask)
+        features["segment_ids"] = create_int_feature(feature.segment_ids)
+        features["label_id"] = create_int_feature(feature.label_id)
+        tf_example = tf.train.Example(features=tf.train.Features(feature=features))
+        writer.write(tf_example.SerializeToString())
+    return True
+
+def file_based_input_fn_builder(input_file, seq_length, mode, drop_remainder, batch_size):
+    name_to_features = {
+        "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
+        "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
+        "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
+        "label_id": tf.FixedLenFeature([seq_length], tf.int64),
+    }
+
+    def _decode_record(record, name_to_features):
+        example = tf.parse_single_example(record, name_to_features)
+        for name in list(example.keys()):
+            t = example[name]
+            if t.dtype == tf.int64:
+                t = tf.to_int32(t)
+            example[name] = t
+        return example
+
+    # From def input_fn(params):
+    d = tf.data.TFRecordDataset(input_file)
+    if mode.lower() == "train":
+        d = d.repeat()
+        d = d.shuffle(buffer_size=100)
+    d = d.apply(tf.contrib.data.map_and_batch(
+        lambda record: _decode_record(record, name_to_features),
+        batch_size=batch_size,
+        drop_remainder=drop_remainder
+    ))
+    return d
+    
+######## For NER Section Done ########
 
 
 class MrpcProcessor(DataProcessor):
@@ -517,8 +673,20 @@ class WnliProcessor(DataProcessor):
 
 
 def convert_examples_to_features(examples, label_list, max_seq_length,
-                                 tokenizer, output_mode):
-    """Loads a data file into a list of `InputBatch`s."""
+                                 tokenizer, output_mode, mode=None, batch_size=None):
+    """
+    Loads a data file into a list of `InputBatch`s.
+    output_mode : seqtag, classification, or regression
+    mode : train, eval, or test
+    """
+
+    if output_mode == "seqtag":
+        filed_based_convert_examples_to_features(
+            examples, label_list, max_seq_length, tokenizer, output_dir, mode) # mode : train, eval, or test
+            
+        input_file = os.path.join(output_dir, "%s.tf_record"%mode)
+        drop_remainder = True if mode.lower()=="train" else False
+        return file_based_input_fn_builder(input_file, max_seq_length, mode, drop_remainder, batch_size)
 
     label_map = {label: i for i, label in enumerate(label_list)}
 
@@ -643,6 +811,8 @@ def compute_metrics(task_name, preds, labels):
         return {"acc": simple_accuracy(preds, labels)}
     elif task_name == "wnli":
         return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "ner": # TODO
+        return acc_and_f1(preds, labels)
     else:
         raise KeyError(task_name)
 
@@ -651,6 +821,9 @@ def get_tensor_data(output_mode, features):
     if output_mode == "classification":
         all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
     elif output_mode == "regression":
+        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
+    elif output_mode == "seqtag":
+        # read from file 
         all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
 
     all_seq_lengths = torch.tensor([f.seq_length for f in features], dtype=torch.long)
@@ -715,15 +888,18 @@ def do_eval(model, task_name, eval_dataloader,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task_type",
-                        default="",
+                        default="seqcls",
                         type=str,
-                        required=True,
-                        help="Which task? : [seqtag | seqcls]")
+                        help="Which task? : [seqtag | seqcls], Default : seqcls")
     parser.add_argument("--data_dir",
                         default=None,
                         type=str,
                         required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
+    parser.add_argument("--labels",
+                        default=None,
+                        type=str,
+                        help="Path to labels.txt for NER (Should contain a list of B, I, O labels; one label per a line.")
     parser.add_argument("--teacher_model",
                         default=None,
                         type=str,
@@ -815,9 +991,6 @@ def main():
     args = parser.parse_args()
     logger.info('The args: {}'.format(args))
 
-    if agrs.task_type not in ["seqtag", "seqcls"]:
-        print("Wrong task_type! Should be one of seqtag or seqcls")
-        raise NotImplemented
 
     processors = {
         "ner": NerProcessor,
@@ -834,7 +1007,7 @@ def main():
     }
 
     output_modes = {
-        "ner": "classification",
+        "ner": "seqtag",
         "cola": "classification",
         "mnli": "classification",
         "mrpc": "classification",
@@ -848,21 +1021,21 @@ def main():
 
     # intermediate distillation default parameters
     default_params = {
-        "ner": {"num_train_epochs": 50, "max_seq_length": 128}, # TODO
-        "cola": {"num_train_epochs": 50, "max_seq_length": 64},
-        "mnli": {"num_train_epochs": 5, "max_seq_length": 128},
-        "mrpc": {"num_train_epochs": 20, "max_seq_length": 128},
-        "sst-2": {"num_train_epochs": 10, "max_seq_length": 64},
-        "sts-b": {"num_train_epochs": 20, "max_seq_length": 128},
-        "qqp": {"num_train_epochs": 5, "max_seq_length": 128},
-        "qnli": {"num_train_epochs": 10, "max_seq_length": 128},
-        "rte": {"num_train_epochs": 20, "max_seq_length": 128}
+        "ner":  {"task_type":"seqtag", "num_train_epochs": 50, "max_seq_length": 128}, # TODO
+        "cola": {"task_type":"seqcls", "num_train_epochs": 50, "max_seq_length": 64},
+        "mnli": {"task_type":"seqcls", "num_train_epochs": 5, "max_seq_length": 128},
+        "mrpc": {"task_type":"seqcls", "num_train_epochs": 20, "max_seq_length": 128},
+        "sst-2":{"task_type":"seqcls", "num_train_epochs": 10, "max_seq_length": 64},
+        "sts-b":{"task_type":"seqcls", "num_train_epochs": 20, "max_seq_length": 128},
+        "qqp":  {"task_type":"seqcls", "num_train_epochs": 5, "max_seq_length": 128},
+        "qnli": {"task_type":"seqcls", "num_train_epochs": 10, "max_seq_length": 128},
+        "rte":  {"task_type":"seqcls", "num_train_epochs": 20, "max_seq_length": 128}
     }
 
-    acc_tasks = ["mnli", "mrpc", "sst-2", "qqp", "qnli", "rte"]
+    acc_tasks = ["mnli", "mrpc", "sst-2", "qqp", "qnli", "rte"] + ["ner"] # TODO : remove ner
+    #entity_f1_tasks = ["ner"]  # TODO
     corr_tasks = ["sts-b"]
     mcc_tasks = ["cola"]
-    f1_tasks = ["ner"]  # TODO
 
     # Prepare devices
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -899,9 +1072,18 @@ def main():
     if task_name not in processors:
         raise ValueError("Task not found: %s" % task_name)
 
+    if task_name in default_params:
+        args.task_type = default_params[task_name]["task_type"]
+    if args.task_type not in ["seqtag", "seqcls"]:
+        print("Wrong task_type! Should be one of seqtag or seqcls")
+        raise NotImplementedError
+
     processor = processors[task_name]()
     output_mode = output_modes[task_name]
-    label_list = processor.get_labels()
+    if args.task_name.lower() == "ner":
+        label_list = processor.get_labels(label_path=args.labels)
+    else:
+        label_list = processor.get_labels()
     num_labels = len(label_list)
 
     tokenizer = BertTokenizer.from_pretrained(args.student_model, do_lower_case=args.do_lower_case)
@@ -921,13 +1103,13 @@ def main():
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
 
         train_features = convert_examples_to_features(train_examples, label_list,
-                                                      args.max_seq_length, tokenizer, output_mode)
+                                                      args.max_seq_length, tokenizer, output_mode, mode="train", batch_size=args.train_batch_size)
         train_data, _ = get_tensor_data(output_mode, train_features)
         train_sampler = RandomSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
     eval_examples = processor.get_dev_examples(args.data_dir)
-    eval_features = convert_examples_to_features(eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+    eval_features = convert_examples_to_features(eval_examples, label_list, args.max_seq_length, tokenizer, output_mode, mode="eval", batch_size=args.eval_batch_size)
     eval_data, eval_labels = get_tensor_data(output_mode, eval_features)
     eval_sampler = SequentialSampler(eval_data)
     eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
@@ -938,7 +1120,7 @@ def main():
         elif args.task_type == "seqcls":
             teacher_model = TinyBertForSequenceClassification.from_pretrained(args.teacher_model, num_labels=num_labels)
         else:
-            raise NotImplemented
+            raise NotImplementedError
         teacher_model.to(device)
 
     if args.task_type == "seqtag":
@@ -946,7 +1128,7 @@ def main():
     elif args.task_type == "seqcls":
         student_model = TinyBertForSequenceClassification.from_pretrained(args.student_model, num_labels=num_labels)
     else:
-        raise NotImplemented
+        raise NotImplementedError
     student_model.to(device)
     if args.do_eval:
         logger.info("***** Running evaluation *****")
@@ -1055,7 +1237,7 @@ def main():
                     tr_rep_loss += rep_loss.item()
                 else: # Prediction-layer Distillation
                     pdb.set_trace() # check shape
-                    if output_mode == "classification":
+                    if output_mode in ["classification", "seqtag"]: # TODO double Check
                         cls_loss = soft_cross_entropy(student_logits / args.temperature,
                                                       teacher_logits / args.temperature)
                     elif output_mode == "regression":
@@ -1148,7 +1330,7 @@ def main():
                             eval_examples = processor.get_dev_examples(args.data_dir)
 
                             eval_features = convert_examples_to_features(
-                                eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+                                eval_examples, label_list, args.max_seq_length, tokenizer, output_mode, mode="eval", batch_size=args.eval_batch_size)
                             eval_data, eval_labels = get_tensor_data(output_mode, eval_features)
 
                             logger.info("***** Running mm evaluation *****")

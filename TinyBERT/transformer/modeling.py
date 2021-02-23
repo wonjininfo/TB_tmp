@@ -39,6 +39,8 @@ from torch.nn.parameter import Parameter
 
 from .file_utils import WEIGHTS_NAME, CONFIG_NAME
 
+import pdb
+
 logger = logging.getLogger(__name__)
 
 PRETRAINED_MODEL_ARCHIVE_MAP = {
@@ -1199,13 +1201,14 @@ class TinyBertForNER(BertPreTrainedModel):
         # for old cls clasisification task
         #logits = self.classifier(torch.relu(pooled_output))  # legacy TODO : delete
         
-        # sequence_output = number of layers * [batch_size, sequence_length, hidden_size]
-        logits = self.seqTagger(sequence_output)
-        assert logit.size()[-1] == config.hidden_size
+        # sequence_output [list of torch tensor] = (number of layers + 1) * [batch_size, sequence_length, hidden_size]
+
+        logits = self.seqTagger(sequence_output[-1])
+        # check  logits.size()[-1] -> 312 
 
         tmp = []
         if is_student:
             for s_id, sequence_layer in enumerate(sequence_output):
                 tmp.append(self.fit_dense(sequence_layer))
-            sequence_output_danse = tmp
-        return logits, att_output, sequence_output_danse
+            sequence_output = tmp
+        return logits, att_output, sequence_output

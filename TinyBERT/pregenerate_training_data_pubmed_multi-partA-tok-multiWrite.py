@@ -339,7 +339,6 @@ def create_instances_from_document_thread(
 def create_training_file(splitIdx, vocab_list, args, epoch_num, bi_text=True):
     global docsDict
     epoch_filename = args.output_dir / "epoch_{}.json".format(epoch_num)
-    #epoch_filename = os.path.join("/datadrive-mirror%s"%epoch_num,"bionlpcorpus/CORPUS_JSON_DIR_pubmed190102_biobert-512-multi", "epoch_{}.json".format(epoch_num)) # hard coded cuz of distributed saving
     num_instances = 0
     with open(epoch_filename, 'w') as epoch_file:
         for doc_idx in trange(len(docsDict[splitIdx]), desc="Document"):
@@ -352,7 +351,6 @@ def create_training_file(splitIdx, vocab_list, args, epoch_num, bi_text=True):
                 epoch_file.write(instance + '\n')
                 num_instances += 1
     metrics_filename = args.output_dir / "epoch_{}_metrics.json".format(epoch_num)
-    #metrics_filename = os.path.join("/datadrive-mirror%s"%epoch_num,"bionlpcorpus/CORPUS_JSON_DIR_pubmed190102_biobert-512-multi", "epoch_{}_metrics.json".format(epoch_num))
     with open(metrics_filename, 'w') as metrics_file:
         metrics = {
             "num_training_examples": num_instances,
@@ -426,7 +424,13 @@ def main():
     args = parser.parse_args()
 
     basePATH = args.train_corpus
-    destPATH = '/datadrive/tmp' #'/cache' # temp storage for intrim txt
+    #destPATH = '/tmp' #'/cache' # temp storage for intrim txt
+    destPATH = os.path.join(args.output_dir, "tmp") #'/cache' # temp storage for intrim txt
+    if os.path.exists(destPATH):
+        if not os.path.isdir(destPATH):
+            raise NotADirectoryError()
+    else:
+        os.makedirs(destPATH, exist_ok=True)    
 
     if args.num_workers > 1 and args.reduce_memory:
         raise ValueError("Cannot use multiple workers while reducing memory")

@@ -42,7 +42,7 @@ from transformer.file_utils import WEIGHTS_NAME, CONFIG_NAME
 
 import tokenization
 import json
-import tf # TODO
+import tensorflow as tf # TODO
 import collections
 
 import pdb
@@ -156,7 +156,8 @@ class NerProcessor(DataProcessor):
                 logger.info("labels.txt not found! Using basic labels of B, I, and O")
                 labelList = ["B", "I", "O"]
 
-        return ["[PAD]"] + labelList + [ "X", "[CLS]", "[SEP]"] 
+        #return ["[PAD]"] + labelList + [ "X", "[CLS]", "[SEP]"] 
+        return labelList 
 
     def _create_example(self, lines, set_type):
         examples = []
@@ -210,7 +211,8 @@ def write_tokens(tokens,mode):
         wf.close()
 
 def convert_single_example(ex_index, example, label_map, max_seq_length, tokenizer,mode): # For NER only
-    textlist = example.text.split()
+    #pdb.set_trace()
+    textlist = example.text_a.split()
     labellist = example.label.split()
     tokens = []
     labels = []
@@ -233,20 +235,26 @@ def convert_single_example(ex_index, example, label_map, max_seq_length, tokeniz
     label_id = []
     ntokens.append("[CLS]")
     segment_ids.append(0)
-    label_id.append(label_map["[CLS]"])
+    #label_id.append(label_map["[CLS]"])
+    label_id.append(label_map["O"])  # putting O instead of [CLS]
     for i, token in enumerate(tokens):
         ntokens.append(token)
         segment_ids.append(0)
-        label_id.append(label_map[labels[i]])
+        if labels[i] == "X":
+            label_id.append(label_map["O"])
+        else:
+            label_id.append(label_map[labels[i]])
     ntokens.append("[SEP]")
     segment_ids.append(0)
-    label_id.append(label_map["[SEP]"])
+    #label_id.append(label_map["[SEP]"])
+    label_id.append(label_map["O"]) # putting O instead of [SEP]
 
     input_ids = tokenizer.convert_tokens_to_ids(ntokens)
     
     # The mask has 1 for real tokens and 0 for padding tokens.
     input_mask = [1] * len(input_ids)
-    
+    seq_length = len(input_ids)
+
     # Zero-pad up to the sequence length.
     while len(input_ids) < max_seq_length:
         input_ids.append(0)
@@ -275,6 +283,7 @@ def convert_single_example(ex_index, example, label_map, max_seq_length, tokeniz
         input_mask=input_mask,
         segment_ids=segment_ids,
         label_id=label_id,
+        seq_length=seq_length
         #label_mask = label_mask
     )
     write_tokens(ntokens,mode)
@@ -287,15 +296,19 @@ def filed_based_convert_examples_to_features(
     label_map = {}
     for i, label in enumerate(label_list):
         label_map[label] = i
-    with open(os.path.join(output_dir,'label2id.json'),'wb') as w:
+    with open(os.path.join(output_dir,'label2id.json'),'w') as w:
         json.dump(obj=label_map,fp=w)    
     
-    writer = tf.python_io.TFRecordWriter(os.path.join(output_dir, "%s.tf_record"%mode))  # TODO : get rid of TFRecord
+    featureList = list()
+
+    #writer = tf.python_io.TFRecordWriter(os.path.join(output_dir, "%s.tf_record"%mode))  # TODO : get rid of TFRecord ; No benefit (speed-wise and code-complexity) at all if we use pytorch based model. 
     for (ex_index, example) in enumerate(examples):
-        if ex_index % 5000 == 0:
+        if ex_index % 1000 == 0:
             logger.info("Writing example %d of %d" % (ex_index, len(examples)))
         feature = convert_single_example(ex_index, example, label_map, max_seq_length, tokenizer,mode)
+        featureList.append(feature)
 
+        """
         def create_int_feature(values):
             f = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
             return f
@@ -307,7 +320,9 @@ def filed_based_convert_examples_to_features(
         features["label_id"] = create_int_feature(feature.label_id)
         tf_example = tf.train.Example(features=tf.train.Features(feature=features))
         writer.write(tf_example.SerializeToString())
-    return True
+        """
+    #return True
+    return featureList
 
 def file_based_input_fn_builder(input_file, seq_length, mode, drop_remainder, batch_size):
     name_to_features = {
@@ -673,7 +688,7 @@ class WnliProcessor(DataProcessor):
 
 
 def convert_examples_to_features(examples, label_list, max_seq_length,
-                                 tokenizer, output_mode, mode=None, batch_size=None):
+                                 tokenizer, output_mode, mode=None, batch_size=None, output_dir=None):
     """
     Loads a data file into a list of `InputBatch`s.
     output_mode : seqtag, classification, or regression
@@ -681,12 +696,14 @@ def convert_examples_to_features(examples, label_list, max_seq_length,
     """
 
     if output_mode == "seqtag":
-        filed_based_convert_examples_to_features(
+        return filed_based_convert_examples_to_features(
             examples, label_list, max_seq_length, tokenizer, output_dir, mode) # mode : train, eval, or test
             
-        input_file = os.path.join(output_dir, "%s.tf_record"%mode)
-        drop_remainder = True if mode.lower()=="train" else False
-        return file_based_input_fn_builder(input_file, max_seq_length, mode, drop_remainder, batch_size)
+        #input_file = os.path.join(output_dir, "%s.tf_record"%mode)
+        #drop_remainder = True if mode.lower()=="train" else False
+        #features = file_based_input_fn_builder(input_file, max_seq_length, mode, drop_remainder, batch_size)
+        #pdb.set_trace()
+        #return features
 
     label_map = {label: i for i, label in enumerate(label_list)}
 
@@ -818,12 +835,20 @@ def compute_metrics(task_name, preds, labels):
 
 
 def get_tensor_data(output_mode, features):
-    if output_mode == "classification":
+    if output_mode == "seqtag":
+        # read from file 
+        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
+        """
+        all_seq_lengths = torch.tensor([f["seq_length"] for f in features], dtype=torch.long)
+        all_input_ids = torch.tensor([f["input_ids"] for f in features], dtype=torch.long)
+        all_input_mask = torch.tensor([f["input_mask"] for f in features], dtype=torch.long)
+        all_segment_ids = torch.tensor([f["segment_ids"] for f in features], dtype=torch.long)
+        tensor_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
+                                    all_label_ids, all_seq_lengths)
+        return tensor_data, all_label_ids"""
+    elif output_mode == "classification":
         all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
     elif output_mode == "regression":
-        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
-    elif output_mode == "seqtag":
-        # read from file 
         all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
 
     all_seq_lengths = torch.tensor([f.seq_length for f in features], dtype=torch.long)
@@ -1046,6 +1071,7 @@ def main():
                         level=logging.INFO)
 
     logger.info("device: {} n_gpu: {}".format(device, n_gpu))
+    tf.enable_eager_execution()
 
     # Prepare seed
     random.seed(args.seed)
@@ -1103,13 +1129,13 @@ def main():
             len(train_examples) / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
 
         train_features = convert_examples_to_features(train_examples, label_list,
-                                                      args.max_seq_length, tokenizer, output_mode, mode="train", batch_size=args.train_batch_size)
+                                                      args.max_seq_length, tokenizer, output_mode, mode="train", batch_size=args.train_batch_size, output_dir=args.output_dir)
         train_data, _ = get_tensor_data(output_mode, train_features)
         train_sampler = RandomSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
     eval_examples = processor.get_dev_examples(args.data_dir)
-    eval_features = convert_examples_to_features(eval_examples, label_list, args.max_seq_length, tokenizer, output_mode, mode="eval", batch_size=args.eval_batch_size)
+    eval_features = convert_examples_to_features(eval_examples, label_list, args.max_seq_length, tokenizer, output_mode, mode="eval", batch_size=args.eval_batch_size, output_dir=args.output_dir)
     eval_data, eval_labels = get_tensor_data(output_mode, eval_features)
     eval_sampler = SequentialSampler(eval_data)
     eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
@@ -1330,7 +1356,7 @@ def main():
                             eval_examples = processor.get_dev_examples(args.data_dir)
 
                             eval_features = convert_examples_to_features(
-                                eval_examples, label_list, args.max_seq_length, tokenizer, output_mode, mode="eval", batch_size=args.eval_batch_size)
+                                eval_examples, label_list, args.max_seq_length, tokenizer, output_mode, mode="eval", batch_size=args.eval_batch_size, output_dir=args.output_dir)
                             eval_data, eval_labels = get_tensor_data(output_mode, eval_features)
 
                             logger.info("***** Running mm evaluation *****")

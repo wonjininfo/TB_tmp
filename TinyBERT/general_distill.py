@@ -114,11 +114,18 @@ class PregeneratedDataset(Dataset):
         metrics = json.loads(metrics_file.read_text())
         num_samples = metrics['num_training_examples']
         seq_len = metrics['max_seq_len']
-        self.temp_dir = None
-        self.working_dir = None
+
         if reduce_memory:
             self.temp_dir = TemporaryDirectory()
-            self.working_dir = Path('/cache')
+            
+            workingPATH = os.path.join(training_path, "tmp") #'/cache' # temp storage for intrim txt
+            if os.path.exists(workingPATH):
+                if not os.path.isdir(workingPATH):
+                    raise NotADirectoryError()
+            else:
+                os.makedirs(workingPATH, exist_ok=True)
+            self.working_dir = Path(workingPATH)
+
             input_ids = np.memmap(filename=self.working_dir/'input_ids.memmap',
                                   mode='w+', dtype=np.int32, shape=(num_samples, seq_len))
             input_masks = np.memmap(filename=self.working_dir/'input_masks.memmap',

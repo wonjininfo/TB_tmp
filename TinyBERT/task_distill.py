@@ -42,8 +42,6 @@ from transformer.file_utils import WEIGHTS_NAME, CONFIG_NAME
 
 import tokenization
 import json
-import tensorflow as tf # TODO
-import collections
 
 import pdb
 
@@ -163,7 +161,7 @@ class NerProcessor(DataProcessor):
         examples = []
         for (i, line) in enumerate(lines):
             guid = "%s-%s" % (set_type, i)
-            text = tokenization.convert_to_unicode(line[1])
+            text = tokenization.convert_to_unicode(line[1]) # TODO assert if tokenization from BERT and tokenization from pytorch mismatch
             label = tokenization.convert_to_unicode(line[0])
             examples.append(InputExample(guid=guid, text_a=text, label=label))
         return examples
@@ -301,57 +299,13 @@ def filed_based_convert_examples_to_features(
     
     featureList = list()
 
-    #writer = tf.python_io.TFRecordWriter(os.path.join(output_dir, "%s.tf_record"%mode))  # TODO : get rid of TFRecord ; No benefit (speed-wise and code-complexity) at all if we use pytorch based model. 
     for (ex_index, example) in enumerate(examples):
         if ex_index % 1000 == 0:
             logger.info("Writing example %d of %d" % (ex_index, len(examples)))
         feature = convert_single_example(ex_index, example, label_map, max_seq_length, tokenizer,mode)
         featureList.append(feature)
 
-        """
-        def create_int_feature(values):
-            f = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
-            return f
-
-        features = collections.OrderedDict()
-        features["input_ids"] = create_int_feature(feature.input_ids)
-        features["input_mask"] = create_int_feature(feature.input_mask)
-        features["segment_ids"] = create_int_feature(feature.segment_ids)
-        features["label_id"] = create_int_feature(feature.label_id)
-        tf_example = tf.train.Example(features=tf.train.Features(feature=features))
-        writer.write(tf_example.SerializeToString())
-        """
-    #return True
     return featureList
-
-def file_based_input_fn_builder(input_file, seq_length, mode, drop_remainder, batch_size):
-    name_to_features = {
-        "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
-        "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
-        "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
-        "label_id": tf.FixedLenFeature([seq_length], tf.int64),
-    }
-
-    def _decode_record(record, name_to_features):
-        example = tf.parse_single_example(record, name_to_features)
-        for name in list(example.keys()):
-            t = example[name]
-            if t.dtype == tf.int64:
-                t = tf.to_int32(t)
-            example[name] = t
-        return example
-
-    # From def input_fn(params):
-    d = tf.data.TFRecordDataset(input_file)
-    if mode.lower() == "train":
-        d = d.repeat()
-        d = d.shuffle(buffer_size=100)
-    d = d.apply(tf.contrib.data.map_and_batch(
-        lambda record: _decode_record(record, name_to_features),
-        batch_size=batch_size,
-        drop_remainder=drop_remainder
-    ))
-    return d
     
 ######## For NER Section Done ########
 
@@ -698,12 +652,6 @@ def convert_examples_to_features(examples, label_list, max_seq_length,
     if output_mode == "seqtag":
         return filed_based_convert_examples_to_features(
             examples, label_list, max_seq_length, tokenizer, output_dir, mode) # mode : train, eval, or test
-            
-        #input_file = os.path.join(output_dir, "%s.tf_record"%mode)
-        #drop_remainder = True if mode.lower()=="train" else False
-        #features = file_based_input_fn_builder(input_file, max_seq_length, mode, drop_remainder, batch_size)
-        #pdb.set_trace()
-        #return features
 
     label_map = {label: i for i, label in enumerate(label_list)}
 
@@ -1071,7 +1019,6 @@ def main():
                         level=logging.INFO)
 
     logger.info("device: {} n_gpu: {}".format(device, n_gpu))
-    tf.enable_eager_execution()
 
     # Prepare seed
     random.seed(args.seed)

@@ -173,6 +173,7 @@ class NerProcessor(DataProcessor):
         lines = []
         words = []
         labels = []
+        continualLineErrorCnt = 0
         for lineIdx, line in enumerate(inpFilept):
             contents = line.splitlines()[0]
             lineList = contents.split()
@@ -184,8 +185,9 @@ class NerProcessor(DataProcessor):
                     lines.append((labelSent, wordSent))
                     words = []
                     labels = []
-                else: 
-                    print("Two continual empty lines detected!")
+                else:
+                    continualLineErrorCnt += 1
+                    #logging.info("Two continual empty lines detected at %s!"%lineIdx)
             else:
                 words.append(lineList[0])
                 labels.append(lineList[-1])
@@ -197,6 +199,7 @@ class NerProcessor(DataProcessor):
             labels = []
 
         inpFilept.close()
+        logging.info("continualLineErrorCnt : %s"%(continualLineErrorCnt))
         return lines
 
 def write_tokens(tokens,mode):
@@ -289,6 +292,7 @@ def convert_single_example(ex_index, example, label_map, max_seq_length, tokeniz
 
 def filed_based_convert_examples_to_features(
         examples, label_list, max_seq_length, tokenizer, output_dir, mode=None):
+    # Actually, it's not file based :) It works on memory currently (2021 Feb)
     # mode [str]: train or test
 
     label_map = {}
@@ -298,14 +302,17 @@ def filed_based_convert_examples_to_features(
         json.dump(obj=label_map,fp=w)    
     
     featureList = list()
+    featureSet = set()
 
     for (ex_index, example) in enumerate(examples):
-        if ex_index % 1000 == 0:
-            logger.info("Writing example %d of %d" % (ex_index, len(examples)))
+        if ex_index % 5000 == 0:
+            logger.info("Processing example %d of %d" % (ex_index, len(examples)))
         feature = convert_single_example(ex_index, example, label_map, max_seq_length, tokenizer,mode)
-        featureList.append(feature)
+        #featureList.append(feature)
+        featureSet.add(feature)
 
-    return featureList
+    #return featureList
+    return featureSet
     
 ######## For NER Section Done ########
 
@@ -690,7 +697,7 @@ def convert_examples_to_features(examples, label_list, max_seq_length,
         assert len(input_mask) == max_seq_length
         assert len(segment_ids) == max_seq_length
 
-        if output_mode == "classification":
+        if output_mode == "classification": # if output_mode == "seqtag" -> processed before this line
             label_id = label_map[example.label]
         elif output_mode == "regression":
             label_id = float(example.label)
@@ -777,7 +784,8 @@ def compute_metrics(task_name, preds, labels):
     elif task_name == "wnli":
         return {"acc": simple_accuracy(preds, labels)}
     elif task_name == "ner": # TODO
-        return acc_and_f1(preds, labels)
+        #return acc_and_f1(preds, labels)
+        return {"acc": simple_accuracy(preds, labels)}
     else:
         raise KeyError(task_name)
 
@@ -830,7 +838,12 @@ def do_eval(model, task_name, eval_dataloader,
             logits, _, _ = model(input_ids, segment_ids, input_mask)
 
         # create eval loss and other metric required by the task
-        if output_mode == "classification":
+        if output_mode == "seqtag":
+            loss_fct = CrossEntropyLoss()
+            #pdb.set_trace()
+            #tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
+            tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.type(torch.LongTensor).cuda().view(-1))
+        elif output_mode == "classification":
             loss_fct = CrossEntropyLoss()
             tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
         elif output_mode == "regression":
@@ -847,12 +860,18 @@ def do_eval(model, task_name, eval_dataloader,
 
     eval_loss = eval_loss / nb_eval_steps
 
-    preds = preds[0]
-    if output_mode == "classification":
+    if output_mode == "seqtag":
+        #pdb.set_trace()
+        preds = np.argmax(preds, axis=-1)
+        result = compute_metrics(task_name, preds.squeeze(), eval_labels.numpy())  # TODO entity level eval for seqtag (2021 Feb 26) - maybe seqeval?
+    elif output_mode == "classification":
+        preds = preds[0]
         preds = np.argmax(preds, axis=1)
+        result = compute_metrics(task_name, preds, eval_labels.numpy()) 
     elif output_mode == "regression":
+        preds = preds[0]
         preds = np.squeeze(preds)
-    result = compute_metrics(task_name, preds, eval_labels.numpy())
+        result = compute_metrics(task_name, preds, eval_labels.numpy()) 
     result['eval_loss'] = eval_loss
 
     return result
@@ -951,7 +970,7 @@ def main():
                         action='store_true')
     parser.add_argument('--eval_step',
                         type=int,
-                        default=50)
+                        default=500)
     parser.add_argument('--pred_distill',
                         action='store_true')
     parser.add_argument('--data_url',
@@ -1209,7 +1228,7 @@ def main():
                     tr_att_loss += att_loss.item()
                     tr_rep_loss += rep_loss.item()
                 else: # Prediction-layer Distillation
-                    pdb.set_trace() # check shape
+                    #pdb.set_trace() # check shape
                     if output_mode in ["classification", "seqtag"]: # TODO double Check
                         cls_loss = soft_cross_entropy(student_logits / args.temperature,
                                                       teacher_logits / args.temperature)
@@ -1284,6 +1303,7 @@ def main():
                         model_to_save = student_model.module if hasattr(student_model, 'module') else student_model
 
                         model_name = WEIGHTS_NAME
+                        model_name = "studentModel_step_{}_{}".format(global_step, WEIGHTS_NAME)
                         # if not args.pred_distill:
                         #     model_name = "step_{}_{}".format(global_step, WEIGHTS_NAME)
                         output_model_file = os.path.join(args.output_dir, model_name)

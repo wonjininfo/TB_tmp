@@ -37,10 +37,12 @@ from sklearn.metrics import matthews_corrcoef, f1_score
 
 from transformer.modeling import TinyBertForNER, TinyBertForSequenceClassification
 from transformer.tokenization import BertTokenizer
+from transformers import PreTrainedTokenizerFast
 from transformer.optimization import BertAdam
 from transformer.file_utils import WEIGHTS_NAME, CONFIG_NAME
 
 import tokenization
+
 import json
 
 import pdb
@@ -163,6 +165,9 @@ class NerProcessor(DataProcessor):
             guid = "%s-%s" % (set_type, i)
             text = tokenization.convert_to_unicode(line[1]) # TODO assert if tokenization from BERT and tokenization from pytorch mismatch
             label = tokenization.convert_to_unicode(line[0])
+            # TODO Feb 28 (WJ)
+            #text = tokenizer.convert_to_unicode(line[1]) # TODO assert if tokenization from BERT and tokenization from pytorch mismatch
+            #label = tokenizer.convert_to_unicode(line[0])
             examples.append(InputExample(guid=guid, text_a=text, label=label))
         return examples
 
@@ -901,6 +906,10 @@ def main():
                         type=str,
                         required=True,
                         help="The student model dir.")
+    parser.add_argument("--tokenizer",
+                        default=None,
+                        type=str,
+                        help="The name of the task to train.")
     parser.add_argument("--task_name",
                         default=None,
                         type=str,
@@ -1046,6 +1055,9 @@ def main():
     if n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
+    #if args.tokenizer == None:
+    #    tokenizer_name=
+
     # Prepare task settings
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir):
         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
@@ -1079,6 +1091,8 @@ def main():
     num_labels = len(label_list)
 
     tokenizer = BertTokenizer.from_pretrained(args.student_model, do_lower_case=args.do_lower_case)
+    # TODO Feb 28 : hard coded (WJ) 
+    #tokenizer = PreTrainedTokenizerFast. # TODO
 
     if not args.do_eval:
         if not args.aug_train:

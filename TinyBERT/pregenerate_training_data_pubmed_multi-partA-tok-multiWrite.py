@@ -378,7 +378,7 @@ def tokenWorker(basePATH, filename, args, destPATH="cache"):
             outFile.write("\t".join(tokens) + "\n")
     outFile.close()
     assert len(line) - linecnt <= 1
-    return{filename: linecnt}
+    return {filename: linecnt}
 
 
 def mthreadReadfile_to_docs(filePath, splitIdx):
